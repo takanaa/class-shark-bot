@@ -35,6 +35,8 @@ def login(message):
     ID, row = find_user(user_id)
     if row == None:
         bot.send_message(chat_id, "Сначала зарегистрируйтесь с помощью /register.")
+    elif row['Status'] == '1':
+        bot.send_message(chat_id, "Вы уже авторизованы.\n\nЧтобы воспользоваться классификатором, введите команду /predict\nЧтобы выйти из системы, введите команду /logout")
     else:
         bot.send_message(chat_id, f"Здравствуйте, {row['Username']}!\n\nВведите пароль")
         bot.register_next_step_handler(message, valid_password, row, 5)
@@ -49,7 +51,16 @@ def predict(message):
 @bot.message_handler(commands=['logout'])
 def logout(message):
     chat_id = message.chat.id
-    bot.send_message(chat_id, "Сначала войдите с помощью /login.")
+    user_id = message.from_user.id
+    ID, row = find_user(user_id)
+    if row == None:
+        bot.send_message(chat_id, "Сначала зарегистрируйтесь с помощью /register.")
+    else:
+        if row['Status'] == '0':
+            bot.send_message(chat_id, "Сначала войдите с помощью /login.")
+        else:
+            update_user(user_id, 0)
+            bot.send_message(chat_id, f"До свидания, {row['Username']}! До новых встреч!")
 
 def find_user(user_id):
     user_count = 0
@@ -79,7 +90,7 @@ def add_user(message):
             with open('base/users.csv', 'a', newline='', encoding='utf-8') as base:
                 writer = csv.writer(base)
                 writer.writerow([ID, user_id, chat_id, user_name, password, 0])
-            bot.send_message(chat_id, "Поздравляю, вы успешно зарегистрированы!")
+            bot.send_message(chat_id, "Поздравляю, вы успешно зарегистрированы!\n\nЧтобы войти в систему введите команду /login")
         else:
             bot.send_message(chat_id, "Вы уже ранее были зарегистрированы")
     except PermissionError:
@@ -111,7 +122,7 @@ def valid_password(message, row, step):
     password = message.text
     if password == row['Password']:
         update_user(user_id, 1)
-        bot.send_message(chat_id, "Поздравляю, вы успешно вошли в систему!")
+        bot.send_message(chat_id, "Поздравляю, вы успешно вошли в систему!\n\nЧтобы воспользоваться классификатором, введите команду /predict\nЧтобы закончить работу, введите команду /logout")
     else:
         if step == 0:
             bot.send_message(chat_id, "Пароль неверный. Повторите попытку позже, когда вспомните пароль...")
