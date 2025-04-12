@@ -31,7 +31,13 @@ def register(message):
 @bot.message_handler(commands=['login'])
 def login(message):
     chat_id = message.chat.id
-    bot.send_message(chat_id, "Сначала зарегистрируйтесь с помощью /register.")
+    user_id = message.from_user.id
+    ID, row = find_user(user_id)
+    if row == None:
+        bot.send_message(chat_id, "Сначала зарегистрируйтесь с помощью /register.")
+    else:
+        bot.send_message(chat_id, f"Здравствуйте, {row['Username']}!\n\nВведите пароль")
+        bot.register_next_step_handler(message, valid_password, row, 5)
 
 # Обработчик команды /predict
 @bot.message_handler(commands=['predict'])
@@ -47,25 +53,32 @@ def logout(message):
 
 def find_user(user_id):
     user_count = 0
-    with open('base/users.csv', 'r', encoding='utf-8') as base:
-        reader = csv.DictReader(base)  # Читаем как словарь (удобно для работы с колонками)
-        for row in reader:
-            user_count = user_count + 1
-            if row['User_ID'] == str(user_id):
-                return row['ID'], row
-    return user_count + 1, None
+    try:
+        with open('base/users.csv', 'r', encoding='utf-8') as base:
+            reader = csv.DictReader(base)  # Читаем как словарь (удобно для работы с колонками)
+            for row in reader:
+                user_count = user_count + 1
+                if row['User_ID'] == str(user_id):
+                    return row['ID'], row
+        return user_count + 1, None
+    except PermissionError:
+        print("Нет прав на запись в файл!")
+    except csv.Error as e:
+        print(f"Ошибка парсинга CSV: {e}")
+    except Exception as e:
+        print(e)
 
 def add_user(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
     user_name = message.from_user.username
     password = message.text
+    ID, row = find_user(user_id)
     try:
-        ID, row = find_user(user_id)
         if row == None:
             with open('base/users.csv', 'a', newline='', encoding='utf-8') as base:
                 writer = csv.writer(base)
-                writer.writerow([ID, user_id, chat_id, user_name, password])
+                writer.writerow([ID, user_id, chat_id, user_name, password, 0])
             bot.send_message(chat_id, "Поздравляю, вы успешно зарегистрированы!")
         else:
             bot.send_message(chat_id, "Вы уже ранее были зарегистрированы")
@@ -75,6 +88,37 @@ def add_user(message):
         print(f"Ошибка парсинга CSV: {e}")
     except Exception as e:
         print(e)
+
+
+def update_user(user_id, new_status):
+    rows = []
+    with open('base/users.csv', 'r', encoding='utf-8') as base:
+        reader = csv.DictReader(base)
+        for row in reader:
+            if row['User_ID'] == str(user_id):
+                row['Status'] = new_status
+            rows.append(row)
+    # Перезаписываем файл
+    with open('base/users.csv', 'w', newline='', encoding='utf-8') as base:
+        writer = csv.DictWriter(base, fieldnames=reader.fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def valid_password(message, row, step):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    password = message.text
+    if password == row['Password']:
+        update_user(user_id, 1)
+        bot.send_message(chat_id, "Поздравляю, вы успешно вошли в систему!")
+    else:
+        if step == 0:
+            bot.send_message(chat_id, "Пароль неверный. Повторите попытку позже, когда вспомните пароль...")
+        else:
+            step = step - 1
+            bot.send_message(chat_id, f"Пароль неверный. Повторите попытку ещё раз.\n\nОсталось попыток: {step}")
+            bot.register_next_step_handler(message, valid_password, row, step)
 
 #Non-stop working mode
 bot.infinity_polling()
