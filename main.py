@@ -45,7 +45,15 @@ def login(message):
 @bot.message_handler(commands=['predict'])
 def predict(message):
     chat_id = message.chat.id
-    bot.send_message(chat_id, "Сначала войдите с помощью /login.")
+    user_id = message.from_user.id
+    ID, row = find_user(user_id)
+    if row == None:
+        bot.send_message(chat_id, "Сначала зарегистрируйтесь с помощью /register.")
+    elif row['Status'] == '0':
+        bot.send_message(chat_id, "Сначала войдите с помощью /login.")
+    else:
+        bot.send_message(chat_id, "Пришлите фотографию")
+        bot.register_next_step_handler(message, recog_image, 1)
 
 # Обработчик команды /logout
 @bot.message_handler(commands=['logout'])
@@ -130,6 +138,33 @@ def valid_password(message, row, step):
             step = step - 1
             bot.send_message(chat_id, f"Пароль неверный. Повторите попытку ещё раз.\n\nОсталось попыток: {step}")
             bot.register_next_step_handler(message, valid_password, row, step)
+
+def recog_image(message, step):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    if message.photo:
+        try:
+            # Берём фото в максимальном качестве
+            file_id = message.photo[-1].file_id
+            file_info = bot.get_file(file_id)
+            downloaded_file = bot.download_file(file_info.file_path)
+            
+            # Сохраняем в папку `photos`
+            filename = f"photos/{message.from_user.id}.jpg"
+            
+            with open(filename, 'wb') as new_file:
+                new_file.write(downloaded_file)
+
+            bot.send_message(chat_id, "Hey bro, nice pic")
+        except Exception as e:
+            bot.reply_to(message, f"Ошибка: {e}")
+    else:
+        if step == 1:
+            step = step - 1
+            bot.send_message(chat_id, "Я же просил картинку :(\nПопробуй ещё раз")
+            bot.register_next_step_handler(message, recog_image, step)
+        elif step == 0:
+            bot.send_message(chat_id, "Это опять не картинка. Поговорим потом")
 
 #Non-stop working mode
 bot.infinity_polling()
