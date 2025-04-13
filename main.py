@@ -1,9 +1,11 @@
 import telebot # Работа с ботом
 import csv # Работа с базой пользователей
-from config import token
+import tensorflow as tf
+from config import token, model
 
 # Создание бота
 bot = telebot.TeleBot(token)
+model = tf.keras.models.load_model(model)
 
 # Обработчик команды /start
 @bot.message_handler(commands=['start'])
@@ -150,12 +152,23 @@ def recog_image(message, step):
             downloaded_file = bot.download_file(file_info.file_path)
             
             # Сохраняем в папку `photos`
-            filename = f"photos/{message.from_user.id}.jpg"
+            image = f"photos/{message.from_user.id}.jpg"
             
-            with open(filename, 'wb') as new_file:
+            with open(image, 'wb') as new_file:
                 new_file.write(downloaded_file)
 
             bot.send_message(chat_id, "Hey bro, nice pic")
+
+            img = tf.keras.preprocessing.image.load_img(image, target_size=(200, 200))
+            img_array = tf.keras.preprocessing.image.img_to_array(img)
+            img_array = tf.expand_dims(img_array, 0)  # Create batch axis
+            predictions = model.predict(img_array)
+            # Определение класса изображения
+            if predictions[0] < 0.5:
+                prediction_text = "акула"
+            else:
+                prediction_text = "человек"
+            bot.send_message(message.chat.id,f'Это {prediction_text}')
         except Exception as e:
             bot.reply_to(message, f"Ошибка: {e}")
     else:
