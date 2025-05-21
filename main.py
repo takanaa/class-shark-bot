@@ -1,11 +1,15 @@
 import telebot # Работа с ботом
 import csv # Работа с базой пользователей
 import tensorflow as tf
-from config import token, model
+from config import token, model, WEBHOOK_URL, WEBHOOK_SECRET
+from flask import Flask, request
 
 # Создание бота
 bot = telebot.TeleBot(token)
 model = tf.keras.models.load_model(model)
+
+# Flask приложение
+app = Flask(__name__)
 
 # Обработчик команды /start
 @bot.message_handler(commands=['start'])
@@ -187,4 +191,24 @@ def recog_image(message, step):
             bot.send_message(chat_id, "Это опять не картинка. Поговорим потом")
 
 #Non-stop working mode
-bot.infinity_polling()
+#bot.infinity_polling()
+
+# Webhook setup
+@app.route('/webhook', methods=['POST'])
+def webhook_handler():
+    update = telebot.types.Update.de_json(request.get_json())
+    bot.process_new_updates([update])
+    return 'OK', 200
+
+def set_webhook():
+    bot.remove_webhook()
+    bot.set_webhook(
+        url=WEBHOOK_URL,
+    )
+
+
+# Initialization
+if __name__ == '__main__':
+    #init_db()
+    set_webhook()
+    app.run(host='127.0.0.1', port=8000)
