@@ -161,14 +161,21 @@ def recog_image(message, step):
 
             img = tf.keras.preprocessing.image.load_img(image, target_size=(200, 200))
             img_array = tf.keras.preprocessing.image.img_to_array(img)
-            img_array = tf.expand_dims(img_array, 0)  # Create batch axis
-            predictions = model.predict(img_array)
-            # Определение класса изображения
-            if predictions[0] < 0.5:
-                prediction_text = "акула"
+            img_array = tf.expand_dims(img_array, 0) / 255.0 # Create batch axis
+            predictions = model.predict(img_array, verbose=0)
+            probability = float(predictions[0][0])  # Преобразуем numpy.float32 в обычный float
+            percent = round(probability * 100, 2)  # Преобразуем в проценты с 2 знаками после запятой
+
+            # Определение класса изображения с выводом вероятности
+            if probability >= 0.7:  # человек
+                bot.send_message(message.chat.id,
+                                 f"На картинке человек (вероятность: {probability:.2f})")
+            elif probability <= 0.2:  # акула
+                bot.send_message(message.chat.id,
+                                 f"На картинке акула! (Вероятность: {1 - probability:.2f})")
             else:
-                prediction_text = "человек"
-            bot.send_message(message.chat.id,f'Это {prediction_text}')
+                bot.send_message(message.chat.id,
+                                 f"Не уверен... Вероятность: {probability:.2f}. Может быть хот-дог?")
         except Exception as e:
             bot.reply_to(message, f"Ошибка: {e}")
     else:
