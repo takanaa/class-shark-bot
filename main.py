@@ -1,8 +1,10 @@
 import telebot # Работа с ботом
-import csv # Работа с базой пользователей
+#import csv # Работа с базой пользователей
 import tensorflow as tf
-from config import token, model, WEBHOOK_URL, WEBHOOK_SECRET
+from config import token, model, webhook_url
 from flask import Flask, request
+import mysql.connector
+from mysql.connector import Error
 
 # Создание бота
 bot = telebot.TeleBot(token)
@@ -38,10 +40,10 @@ def register(message):
 def login(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
-    ID, row = find_user(user_id)
-    if row == None:
+    stat = find_user(user_id)
+    if stat == -1:
         bot.send_message(chat_id, "Сначала зарегистрируйтесь с помощью /register.")
-    elif row['Status'] == '1':
+    elif stat == 1:
         bot.send_message(chat_id, "Вы уже авторизованы.\n\nЧтобы воспользоваться классификатором, введите команду /predict\nЧтобы выйти из системы, введите команду /logout")
     else:
         bot.send_message(chat_id, f"Здравствуйте, {row['Username']}!\n\nВведите пароль")
@@ -52,10 +54,10 @@ def login(message):
 def predict(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
-    ID, row = find_user(user_id)
-    if row == None:
+    stat = find_user(user_id)
+    if stat == -1:
         bot.send_message(chat_id, "Сначала зарегистрируйтесь с помощью /register.")
-    elif row['Status'] == '0':
+    elif stat == 0:
         bot.send_message(chat_id, "Сначала войдите с помощью /login.")
     else:
         bot.send_message(chat_id, "Пришлите фотографию")
@@ -66,86 +68,135 @@ def predict(message):
 def logout(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
-    ID, row = find_user(user_id)
-    if row == None:
+    stat = find_user(user_id)
+    if stat == -1:
         bot.send_message(chat_id, "Сначала зарегистрируйтесь с помощью /register.")
     else:
-        if row['Status'] == '0':
+        if stat == 0:
             bot.send_message(chat_id, "Сначала войдите с помощью /login.")
         else:
             update_user(user_id, 0)
             bot.send_message(chat_id, f"До свидания, {row['Username']}! До новых встреч!")
 
 def find_user(user_id):
-    user_count = 0
+    """
+    Поиск пользователя в базе данных
+    Возвращает статус пользователя или -1, если пользователь ещё не зарегистрирован
+    """
+    connection = connect_db()
+    if connection is None:
+        return None, "Database connection failed"
+    cursor = connection.cursor(dictionary=True)
     try:
-        with open('base/users.csv', 'r', encoding='utf-8') as base:
-            reader = csv.DictReader(base)  # Читаем как словарь (удобно для работы с колонками)
-            for row in reader:
-                user_count = user_count + 1
-                if row['User_ID'] == str(user_id):
-                    return row['ID'], row
-        return user_count + 1, None
-    except PermissionError:
-        print("Нет прав на запись в файл!")
-    except csv.Error as e:
-        print(f"Ошибка парсинга CSV: {e}")
-    except Exception as e:
-        print(e)
+        current_user = cursor.execute("SELECT id, status FROM users WHERE user = %s", (str(user_id),))
+        if current_user:
+            return int(current_ser['status'])
+        else:
+            return -1
+    except Error as e:
+        connection.rollback()
+        print(f"Error finding user: {e}")
+    finally:
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
 
 def add_user(message):
+    """ Добавляет нового пользователя в систему """
     chat_id = message.chat.id
     user_id = message.from_user.id
-    user_name = message.from_user.username
-    password = message.text
-    ID, row = find_user(user_id)
+    password = hash_pass(message.text.strip())
+    connection = connect_db()
+    if connection is None:
+        return None, "Database connection failed"
+    cursor = connection.cursor(dictionary=True)
     try:
-        if row == None:
-            with open('base/users.csv', 'a', newline='', encoding='utf-8') as base:
-                writer = csv.writer(base)
-                writer.writerow([ID, user_id, chat_id, user_name, password, 0])
-            bot.send_message(chat_id, "Поздравляю, вы успешно зарегистрированы!\n\nЧтобы войти в систему введите команду /login")
-        else:
+        cursor.execute("SELECT id FROM users WHERE user = %s", (str(user_id),))
+        if cursor.fetchone():
             bot.send_message(chat_id, "Вы уже ранее были зарегистрированы")
-    except PermissionError:
-        print("Нет прав на запись в файл!")
-    except csv.Error as e:
-        print(f"Ошибка парсинга CSV: {e}")
-    except Exception as e:
-        print(e)
+            return
 
+        insert_query = "INSERT INTO users (user, chat, password) VALUES (%s, %s, %s)"
+        cursor.execute(insert_query, (str(user_id), str(chat_id), password))
+        connection.commit()
+        print("New user registered")
+        bot.send_message(chat_id, "Поздравляю, вы успешно зарегистрированы!\n\nЧтобы войти в систему введите команду /login")
+    except Error as e:
+        connection.rollback()
+        print(f"Error adding user: {e}")
+    finally:
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
 
 def update_user(user_id, new_status):
-    rows = []
-    with open('base/users.csv', 'r', encoding='utf-8') as base:
-        reader = csv.DictReader(base)
-        for row in reader:
-            if row['User_ID'] == str(user_id):
-                row['Status'] = new_status
-            rows.append(row)
-    # Перезаписываем файл
-    with open('base/users.csv', 'w', newline='', encoding='utf-8') as base:
-        writer = csv.DictWriter(base, fieldnames=reader.fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
+    """ Обновляет статус пользователя """
+    connection = connect_db()
+    if connection is None:
+        print("Database connection failed")
+    cursor = connection.cursor(dictionary=True)
+    try:
+        update_query = "UPDATE users SET status = %s WHERE user = %s"
+        cursor.execute(update_query, (str(new_status), str(user_id)))
+        connection.commit()
+        if cursor.rowcount == 0:
+            print("Status wasn't updated")
+    except Error as e:
+        connection.rollback()
+        print(f"Error updating status: {e}")
+    finally:
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
 
 
 def valid_password(message, row, step):
+    """ Получает пароль от пользователя и проверяет его """
     chat_id = message.chat.id
     user_id = message.from_user.id
     password = message.text
-    if password == row['Password']:
-        update_user(user_id, 1)
-        bot.send_message(chat_id, "Поздравляю, вы успешно вошли в систему!\n\nЧтобы воспользоваться классификатором, введите команду /predict\nЧтобы закончить работу, введите команду /logout")
+
+    connection = connect_db()
+    if connection is None:
+        return None, "Database connection failed"
+    cursor = connection.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT password FROM users WHERE user = %s", (str(user_id),))
+        current_user = cursor.fetchone()
+        if current_user:
+            if check_hash_pass(current_user['password'], password):
+                update_user(user_id, 1)
+                bot.send_message(chat_id, "Поздравляю, вы успешно вошли в систему!\n\nЧтобы воспользоваться классификатором, введите команду /predict\nЧтобы закончить работу, введите команду /logout")
+            else:
+                if step == 0:
+                    bot.send_message(chat_id, "Пароль неверный. Повторите попытку позже, когда вспомните пароль...")
+                else:
+                    step = step - 1
+                    bot.send_message(chat_id, f"Пароль неверный. Повторите попытку ещё раз.\n\nОсталось попыток: {step}")
+                    bot.register_next_step_handler(message, valid_password, row, step)
+    except Error as e:
+        connection.rollback()
+        print(f"Error finding user: {e}")
+    finally:
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
+
+def hash_pass(password):
+    """ Функция хэширования паролей """
+    salt = uuid.uuid4().hex
+    return hashlib.sha256(salt.encode() + password.encode()).hexdigest() + ':' + salt
+
+def check_hash_pass(hash_password, user_password):
+    """ Проверка хэшированного пароля """
+    password, salt = hash_password.split(':')
+    if password == hashlib.sha256(salt.encode() + password.encode()).hexdigest():
+        return 1
     else:
-        if step == 0:
-            bot.send_message(chat_id, "Пароль неверный. Повторите попытку позже, когда вспомните пароль...")
-        else:
-            step = step - 1
-            bot.send_message(chat_id, f"Пароль неверный. Повторите попытку ещё раз.\n\nОсталось попыток: {step}")
-            bot.register_next_step_handler(message, valid_password, row, step)
+        return 0
 
 def recog_image(message, step):
+    """ Распознаёт изображение на фотографии """
     chat_id = message.chat.id
     user_id = message.from_user.id
     if message.photo:
@@ -190,9 +241,6 @@ def recog_image(message, step):
         elif step == 0:
             bot.send_message(chat_id, "Это опять не картинка. Поговорим потом")
 
-#Non-stop working mode
-#bot.infinity_polling()
-
 # Webhook setup
 @app.route('/webhook', methods=['POST'])
 def webhook_handler():
@@ -200,15 +248,67 @@ def webhook_handler():
     bot.process_new_updates([update])
     return 'OK', 200
 
-def set_webhook():
-    bot.remove_webhook()
-    bot.set_webhook(
-        url=WEBHOOK_URL,
-    )
+def connect_db():
+    """ Функция подключения к базе данных """
+    try:
+        connection = mysql.connector.connect(
+            host='localhost',
+            database='baby_shark',
+            user='root',
+            password='0000'
+        )
+        return connection
+    except Error as e:
+        print(f"Error connecting to MySQL: {e}")
+        return None
 
+def init_db():
+    """ Инициализирует базу данных """
+    try:
+        connection = connect_db()
+        if connection.is_connected():
+            cursor = connection.cursor()
 
-# Initialization
+            # Создание таблицы
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user VARCHAR(100) NOT NULL UNIQUE COMMENT 'Telegram user id',
+                chat VARCHAR(100) NOT NULL UNIQUE COMMENT 'Telegram chat id',
+                password TEXT COMMENT 'Password after hash func',
+                status INT DEFAULT 0 COMMENT 'If user is logged in'
+            )
+            """)
+            connection.commit()
+            print("Table was done successfully.")
+
+    except Error as e:
+        print(f"MySQL error: {e}")
+    finally:
+        if 'connection' in locals() and connection.is_connected():
+            cursor.close()
+            connection.close()
+
+def check_db():
+    """ Debug! """
+    connection = connect_db()
+    if connection is None:
+        return [], "Database connection failed"
+    cursor = connection.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT id, user, chat, password, status FROM users")
+        categories = cursor.fetchall()
+        print(categories)
+    except Error as e:
+        print(f"Error fetching categories: {e}")
+    finally:
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
+
 if __name__ == '__main__':
-    #init_db()
-    set_webhook()
+    init_db()
+    #check_db()
+    bot.remove_webhook()
+    bot.set_webhook(url=webhook_url)
     app.run(host='127.0.0.1', port=8000)
