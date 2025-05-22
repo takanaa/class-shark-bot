@@ -5,13 +5,17 @@ from config import token, model, webhook_url
 from flask import Flask, request
 import mysql.connector
 from mysql.connector import Error
+import hashlib
+import uuid
+import os
+from PIL import Image
 
 # Создание бота
 bot = telebot.TeleBot(token)
 model = tf.keras.models.load_model(model)
 
 # Flask приложение
-app = Flask(__name__)
+#app = Flask(__name__)
 
 # Обработчик команды /start
 @bot.message_handler(commands=['start'])
@@ -46,8 +50,8 @@ def login(message):
     elif stat == 1:
         bot.send_message(chat_id, "Вы уже авторизованы.\n\nЧтобы воспользоваться классификатором, введите команду /predict\nЧтобы выйти из системы, введите команду /logout")
     else:
-        bot.send_message(chat_id, f"Здравствуйте, {row['Username']}!\n\nВведите пароль")
-        bot.register_next_step_handler(message, valid_password, row, 5)
+        bot.send_message(chat_id, f"Здравствуйте, {message.from_user.username}!\n\nВведите пароль")
+        bot.register_next_step_handler(message, valid_password, 5)
 
 # Обработчик команды /predict
 @bot.message_handler(commands=['predict'])
@@ -76,7 +80,7 @@ def logout(message):
             bot.send_message(chat_id, "Сначала войдите с помощью /login.")
         else:
             update_user(user_id, 0)
-            bot.send_message(chat_id, f"До свидания, {row['Username']}! До новых встреч!")
+            bot.send_message(chat_id, f"До свидания, {message.from_user.username}! До новых встреч!")
 
 def find_user(user_id):
     """
@@ -88,9 +92,10 @@ def find_user(user_id):
         return None, "Database connection failed"
     cursor = connection.cursor(dictionary=True)
     try:
-        current_user = cursor.execute("SELECT id, status FROM users WHERE user = %s", (str(user_id),))
+        cursor.execute("SELECT id, status FROM users WHERE user = %s", (str(user_id),))
+        current_user = cursor.fetchone()
         if current_user:
-            return int(current_ser['status'])
+            return int(current_user['status'])
         else:
             return -1
     except Error as e:
@@ -150,7 +155,7 @@ def update_user(user_id, new_status):
             connection.close()
 
 
-def valid_password(message, row, step):
+def valid_password(message, step):
     """ Получает пароль от пользователя и проверяет его """
     chat_id = message.chat.id
     user_id = message.from_user.id
@@ -173,7 +178,7 @@ def valid_password(message, row, step):
                 else:
                     step = step - 1
                     bot.send_message(chat_id, f"Пароль неверный. Повторите попытку ещё раз.\n\nОсталось попыток: {step}")
-                    bot.register_next_step_handler(message, valid_password, row, step)
+                    bot.register_next_step_handler(message, valid_password, step)
     except Error as e:
         connection.rollback()
         print(f"Error finding user: {e}")
@@ -190,7 +195,7 @@ def hash_pass(password):
 def check_hash_pass(hash_password, user_password):
     """ Проверка хэшированного пароля """
     password, salt = hash_password.split(':')
-    if password == hashlib.sha256(salt.encode() + password.encode()).hexdigest():
+    if password == hashlib.sha256(salt.encode() + user_password.encode()).hexdigest():
         return 1
     else:
         return 0
@@ -207,13 +212,17 @@ def recog_image(message, step):
             downloaded_file = bot.download_file(file_info.file_path)
             
             # Сохраняем в папку `photos`
-            image = f"photos/{message.from_user.id}.jpg"
+            image_dir = "photos"  # Название папки
+            os.makedirs(image_dir, exist_ok=True)  # Создаём папку, если её нет
+            image = os.path.join(image_dir, f"{message.from_user.id}.jpg")
             
             with open(image, 'wb') as new_file:
                 new_file.write(downloaded_file)
 
             bot.send_message(chat_id, "Hey bro, nice pic")
-
+ 
+            img = Image.open(image)  # Проверка, что изображение валидно
+            img = img.resize((200, 200))  # Ресайз
             img = tf.keras.preprocessing.image.load_img(image, target_size=(200, 200))
             img_array = tf.keras.preprocessing.image.img_to_array(img)
             img_array = tf.expand_dims(img_array, 0) / 255.0 # Create batch axis
@@ -242,12 +251,14 @@ def recog_image(message, step):
             bot.send_message(chat_id, "Это опять не картинка. Поговорим потом")
 
 # Webhook setup
+"""
 @app.route('/webhook', methods=['POST'])
 def webhook_handler():
     update = telebot.types.Update.de_json(request.get_json())
     bot.process_new_updates([update])
     return 'OK', 200
-
+"""
+    
 def connect_db():
     """ Функция подключения к базе данных """
     try:
@@ -310,5 +321,6 @@ if __name__ == '__main__':
     init_db()
     #check_db()
     bot.remove_webhook()
-    bot.set_webhook(url=webhook_url)
-    app.run(host='127.0.0.1', port=8000)
+    #bot.set_webhook(url=webhook_url)
+    bot.polling(none_stop=True)
+    #app.run(host='0.0.0.0', port=5001)
