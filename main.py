@@ -81,6 +81,142 @@ def logout(message):
             update_user(user_id, 0)
             bot.send_message(chat_id, f"До свидания, {message.from_user.username}! До новых встреч!")
 
+# Обработчик команды /admin
+@bot.message_handler(commands=['admin'])
+def admin_panel(message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    admin = admin_stat(user_id)
+    if (admin):
+        markup = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)  # one_time_keyboard=True – клавиатура скроется после нажатия
+        markup.add(KeyboardButton("Список пользователей"))
+        markup.add(KeyboardButton("Добавить администратора"))
+        markup.add(KeyboardButton("Удалить пользователя"))
+        bot.send_message(message.chat.id, "Выберете действие с пользователями", reply_markup=markup)
+        bot.register_next_step_handler(message, admin_options)
+    else:
+        bot.send_message(chat_id, "У вас нет прав, чтобы воспользоваться этой командой\n\nТребуется роль администратора. Запросите права администратора у ")
+
+def admin_options(message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    option = message.text.strip()
+    all_users = get_users()
+    if (option == "Список пользователей"):
+        users_list = ""
+        for user in all_users:
+            users_list = users_list + user['username'].strip() + " : " + user['predictions'] + " predictions\n"
+        bot.send_message(chat_id, user_list)
+    elif (option == "Добавить администратора"):
+        users_list = "Введите username пользователя, которого хотите сделать администратором:\n"
+        for user in all_users:
+            users_list = users_list + "@" + user['username'].strip() + "\n"
+        bot.send_message(chat_id, user_list)
+        bot.register_next_step_handler(message, make_admin)
+    elif (option == "Удалить пользователя"):
+        users_list = "Введите username пользователя, которого хотите удалить:\n"
+        for user in all_users:
+            users_list = users_list + "@" + user['username'].strip() + "\n"
+        bot.send_message(chat_id, user_list)
+        bot.register_next_step_handler(message, delete_user)
+    else:
+        bot.send_message(chat_id, "Неверная опция администратора")
+
+def get_users():
+    """ Получить список всех пользователей """
+    connection = connect_db()
+    if connection is None:
+        return None, "Database connection failed"
+    cursor = connection.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT id, username, predictions FROM users")
+        current_user = cursor.fetchall()
+        if current_user:
+            return current_user
+        else:
+            return -1
+    except Error as e:
+        connection.rollback()
+        print(f"Error fetching users: {e}")
+    finally:
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
+
+def make_admin(message):
+    """ Обновляет статус администратора """
+    connection = connect_db()
+    if connection is None:
+        print("Database connection failed")
+    cursor = connection.cursor(dictionary=True)
+    try:
+        username = message.text.strip()
+        if username[0] == '@':
+            username = username[0:]
+        update_query = "UPDATE users SET admin = %s WHERE username = %s"
+        cursor.execute(update_query, ("1", str(username)))
+        connection.commit()
+        if cursor.rowcount == 0:
+            print("Admin status wasn't updated")
+        else:
+            print(f"User {username} is admin now")
+    except Error as e:
+        connection.rollback()
+        print(f"Error updating status: {e}")
+    finally:
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
+
+def delete_user(message):
+    """ Удаляет пользователя """
+    connection = connect_db()
+    if connection is None:
+        print("Database connection failed")
+    cursor = connection.cursor(dictionary=True)
+    try:
+        username = message.text.strip()
+        if username[0] == '@':
+            username = username[0:]
+        cursor.execute("DELETE FROM users WHERE username = %s", (username,))
+        connection.commit()
+        if cursor.rowcount == 0:
+            print("User wasn't deleted")
+        else:
+            print(f"User {username} deleted")
+    except Error as e:
+        connection.rollback()
+        print(f"Error updating status: {e}")
+    finally:
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
+
+def admin_stat(user_id):
+    """
+    Поиск пользователя в базе данных
+    Возвращает статус админа: 1 -- если админ; 0 -- если нет
+    -1 -- пользователь не найден
+    """
+    connection = connect_db()
+    if connection is None:
+        return None, "Database connection failed"
+    cursor = connection.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT id, admin FROM users WHERE user = %s", (str(user_id),))
+        current_user = cursor.fetchone()
+        if current_user:
+            return int(current_user['admin'])
+        else:
+            return -1
+    except Error as e:
+        connection.rollback()
+        print(f"Error finding user: {e}")
+    finally:
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
+
 def find_user(user_id):
     """
     Поиск пользователя в базе данных
@@ -293,7 +429,9 @@ def init_db():
                 user VARCHAR(100) NOT NULL UNIQUE COMMENT 'Telegram user id',
                 chat VARCHAR(100) NOT NULL UNIQUE COMMENT 'Telegram chat id',
                 password TEXT COMMENT 'Password after hash func',
-                status INT DEFAULT 0 COMMENT 'If user is logged in'
+                status INT DEFAULT 0 COMMENT 'If user is logged in',
+                predictions INT DEFAULT 0 COMMENT 'Count of predictions',
+                admin INT DEFAULT 0 COMMENT 'If user id admin'
             )
             """)
             connection.commit()
