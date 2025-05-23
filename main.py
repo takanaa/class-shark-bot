@@ -186,7 +186,7 @@ def delete_user(message):
             print(f"User {username} deleted")
     except Error as e:
         connection.rollback()
-        print(f"Error updating status: {e}")
+        print(f"Error deleting user: {e}")
     finally:
         if connection.is_connected():
             cursor.close()
@@ -211,7 +211,7 @@ def admin_stat(user_id):
             return -1
     except Error as e:
         connection.rollback()
-        print(f"Error finding user: {e}")
+        print(f"Error setting admin status: {e}")
     finally:
         if connection.is_connected():
             cursor.close()
@@ -245,6 +245,7 @@ def add_user(message):
     """ Добавляет нового пользователя в систему """
     chat_id = message.chat.id
     user_id = message.from_user.id
+    username = message.from_user.username
     password = hash_pass(message.text.strip())
     connection = connect_db()
     if connection is None:
@@ -256,8 +257,8 @@ def add_user(message):
             bot.send_message(chat_id, "Вы уже ранее были зарегистрированы")
             return
 
-        insert_query = "INSERT INTO users (user, chat, password) VALUES (%s, %s, %s)"
-        cursor.execute(insert_query, (str(user_id), str(chat_id), password))
+        insert_query = "INSERT INTO users (user, username, password) VALUES (%s, %s, %s)"
+        cursor.execute(insert_query, (str(user_id), str(username), password))
         connection.commit()
         print("New user registered")
         bot.send_message(chat_id, "Поздравляю, вы успешно зарегистрированы!\n\nЧтобы войти в систему введите команду /login")
@@ -289,6 +290,25 @@ def update_user(user_id, new_status):
             cursor.close()
             connection.close()
 
+def update_predict_counter(user_id):
+    """ Инкрементирует счётчик """
+    connection = connect_db()
+    if connection is None:
+        print("Database connection failed")
+    cursor = connection.cursor(dictionary=True)
+    try:
+        update_query = "UPDATE users SET predictions = predictions + 1 WHERE name = %s"
+        cursor.execute(update_query, (str(user_id),))
+        connection.commit()
+        if cursor.rowcount == 0:
+            print("Counter wasn't updated")
+    except Error as e:
+        connection.rollback()
+        print(f"Error updating counter: {e}")
+    finally:
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
 
 def valid_password(message, step):
     """ Получает пароль от пользователя и проверяет его """
@@ -375,6 +395,7 @@ def recog_image(message, step):
             else:
                 bot.send_message(message.chat.id,
                                  f"Не уверен... Вероятность: {probability:.2f}. Может быть хот-дог?")
+            update_predict_counter(user_id)
         except Exception as e:
             bot.reply_to(message, f"Ошибка: {e}")
     else:
@@ -427,7 +448,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS users (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 user VARCHAR(100) NOT NULL UNIQUE COMMENT 'Telegram user id',
-                chat VARCHAR(100) NOT NULL UNIQUE COMMENT 'Telegram chat id',
+                username VARCHAR(100) NOT NULL UNIQUE COMMENT 'Telegram chat id',
                 password TEXT COMMENT 'Password after hash func',
                 status INT DEFAULT 0 COMMENT 'If user is logged in',
                 predictions INT DEFAULT 0 COMMENT 'Count of predictions',
