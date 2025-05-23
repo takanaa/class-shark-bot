@@ -1,5 +1,4 @@
 import telebot # Работа с ботом
-#import csv # Работа с базой пользователей
 import tensorflow as tf
 from config import token, model, webhook_url
 from flask import Flask, request
@@ -15,7 +14,7 @@ bot = telebot.TeleBot(token)
 model = tf.keras.models.load_model(model)
 
 # Flask приложение
-#app = Flask(__name__)
+app = Flask(__name__)
 
 # Обработчик команды /start
 @bot.message_handler(commands=['start'])
@@ -251,14 +250,21 @@ def recog_image(message, step):
             bot.send_message(chat_id, "Это опять не картинка. Поговорим потом")
 
 # Webhook setup
-"""
-@app.route('/webhook', methods=['POST'])
+@app.route("/webhook", methods=["GET", "POST"])
 def webhook_handler():
-    update = telebot.types.Update.de_json(request.get_json())
+    if request.method == "GET":
+        return "Webhook works", 200
+    update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
     bot.process_new_updates([update])
     return 'OK', 200
-"""
     
+@app.route("/", methods=["GET"])
+def home():
+    if request.method == "GET":
+        return "It's a home page", 200
+    return 'OK', 200
+
+
 def connect_db():
     """ Функция подключения к базе данных """
     try:
@@ -300,27 +306,9 @@ def init_db():
             cursor.close()
             connection.close()
 
-def check_db():
-    """ Debug! """
-    connection = connect_db()
-    if connection is None:
-        return [], "Database connection failed"
-    cursor = connection.cursor(dictionary=True)
-    try:
-        cursor.execute("SELECT id, user, chat, password, status FROM users")
-        categories = cursor.fetchall()
-        print(categories)
-    except Error as e:
-        print(f"Error fetching categories: {e}")
-    finally:
-        if connection.is_connected():
-            cursor.close()
-            connection.close()
-
 if __name__ == '__main__':
     init_db()
-    #check_db()
     bot.remove_webhook()
-    #bot.set_webhook(url=webhook_url)
-    bot.polling(none_stop=True)
-    #app.run(host='0.0.0.0', port=5001)
+    print(f"    (DEBUG)    {webhook_url}")
+    bot.set_webhook(url=webhook_url)
+    app.run(host='127.0.0.1', port=8000)
