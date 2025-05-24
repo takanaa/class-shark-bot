@@ -1,6 +1,6 @@
-import telebot # Работа с ботом
+from telebot import types, TeleBot # Работа с ботом
 import tensorflow as tf
-from config import token, model, webhook_url
+from config import token, model, webhook_url, main_admins
 from flask import Flask, request
 import mysql.connector
 from mysql.connector import Error
@@ -10,7 +10,7 @@ import os
 from PIL import Image
 
 # Создание бота
-bot = telebot.TeleBot(token)
+bot = TeleBot(token)
 model = tf.keras.models.load_model(model)
 
 # Flask приложение
@@ -27,7 +27,7 @@ def send_welcome(message):
 @bot.message_handler(commands=['help'])
 def send_help(message):
     chat_id = message.chat.id
-    helpText = "Вот основные функции бота:\n\n/register -- Регистрация в системе бота\n/login -- Вход в систему бота\n/logout -- Выход из системы\n/predict -- Определение класса объекта на картинке. Пользоваться функцией могут только заригестрированные и авторизованные пользователи"
+    helpText = "Вот основные функции бота:\n\n/register -- Регистрация в системе бота\n/login -- Вход в систему бота\n/logout -- Выход из системы\n/predict -- Определение класса объекта на картинке. Пользоваться функцией могут только заригестрированные и авторизованные пользователи\n/admin -- Панель админа для управления пользователями. Функция доступна только администраторам бота"
     bot.send_message(chat_id, helpText)
 
 # Обработчик команды /register
@@ -87,13 +87,15 @@ def admin_panel(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
     admin = admin_stat(user_id)
-    if (admin):
-        markup = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)  # one_time_keyboard=True – клавиатура скроется после нажатия
-        markup.add(KeyboardButton("Список пользователей"))
-        markup.add(KeyboardButton("Добавить администратора"))
-        markup.add(KeyboardButton("Удалить пользователя"))
+    if admin == 1:
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)  # one_time_keyboard=True – клавиатура скроется после нажатия
+        markup.add(types.KeyboardButton("Список пользователей"))
+        markup.add(types.KeyboardButton("Добавить администратора"))
+        markup.add(types.KeyboardButton("Удалить пользователя"))
         bot.send_message(message.chat.id, "Выберете действие с пользователями", reply_markup=markup)
         bot.register_next_step_handler(message, admin_options)
+    elif admin == -1:
+        bot.send_message(chat_id, "Сначала зарегистрируйтесь с помощью /register.")
     else:
         bot.send_message(chat_id, "У вас нет прав, чтобы воспользоваться этой командой\n\nТребуется роль администратора. Запросите права администратора у ")
 
@@ -103,21 +105,37 @@ def admin_options(message):
     option = message.text.strip()
     all_users = get_users()
     if (option == "Список пользователей"):
-        users_list = ""
+        users_list = "Все пользователи бота:\n"
         for user in all_users:
-            users_list = users_list + user['username'].strip() + " : " + user['predictions'] + " predictions\n"
-        bot.send_message(chat_id, user_list)
+            users_list = users_list + "@" + user['username'].strip() + " : " + str(user['predictions']) + " predictions"
+            if user['admin'] == 1:
+                users_list = users_list + " (admin)\n"
+            else:
+                users_list = users_list + "\n"
+        bot.send_message(chat_id, users_list)
     elif (option == "Добавить администратора"):
         users_list = "Введите username пользователя, которого хотите сделать администратором:\n"
         for user in all_users:
-            users_list = users_list + "@" + user['username'].strip() + "\n"
-        bot.send_message(chat_id, user_list)
+            users_list = users_list + "@" + user['username'].strip()
+            if user['admin'] == 1:
+                users_list = users_list + " (admin)\n"
+            else:
+                users_list = users_list + "\n"
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+        markup.add(types.KeyboardButton("Отмена"))
+        bot.send_message(chat_id, users_list, reply_markup=markup)
         bot.register_next_step_handler(message, make_admin)
     elif (option == "Удалить пользователя"):
         users_list = "Введите username пользователя, которого хотите удалить:\n"
         for user in all_users:
-            users_list = users_list + "@" + user['username'].strip() + "\n"
-        bot.send_message(chat_id, user_list)
+            users_list = users_list + "@" + user['username'].strip()
+            if user['admin'] == 1:
+                users_list = users_list + " (admin)\n"
+            else:
+                users_list = users_list + "\n"
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+        markup.add(types.KeyboardButton("Отмена"))
+        bot.send_message(chat_id, users_list, reply_markup=markup)
         bot.register_next_step_handler(message, delete_user)
     else:
         bot.send_message(chat_id, "Неверная опция администратора")
@@ -129,7 +147,7 @@ def get_users():
         return None, "Database connection failed"
     cursor = connection.cursor(dictionary=True)
     try:
-        cursor.execute("SELECT id, username, predictions FROM users")
+        cursor.execute("SELECT id, username, predictions, admin FROM users")
         current_user = cursor.fetchall()
         if current_user:
             return current_user
@@ -145,20 +163,25 @@ def get_users():
 
 def make_admin(message):
     """ Обновляет статус администратора """
+    username = message.text.strip()
+    if (username == "Отмена"):
+        return
     connection = connect_db()
     if connection is None:
         print("Database connection failed")
     cursor = connection.cursor(dictionary=True)
     try:
-        username = message.text.strip()
         if username[0] == '@':
-            username = username[0:]
+            username = username[1:]
         update_query = "UPDATE users SET admin = %s WHERE username = %s"
         cursor.execute(update_query, ("1", str(username)))
         connection.commit()
         if cursor.rowcount == 0:
             print("Admin status wasn't updated")
         else:
+            cursor.execute("SELECT id, user FROM users WHERE username = %s", (str(username),))
+            new_admin = cursor.fetchone()
+            bot.send_message(new_admin['user'], "Вас назначили администратором. Теперь вам доступна команда /admin")
             print(f"User {username} is admin now")
     except Error as e:
         connection.rollback()
@@ -170,19 +193,24 @@ def make_admin(message):
 
 def delete_user(message):
     """ Удаляет пользователя """
+    username = message.text.strip()
+    if (username == "Отмена"):
+        return
     connection = connect_db()
     if connection is None:
         print("Database connection failed")
     cursor = connection.cursor(dictionary=True)
     try:
-        username = message.text.strip()
         if username[0] == '@':
-            username = username[0:]
+            username = username[1:]
+        cursor.execute("SELECT id, user FROM users WHERE username = %s", (str(username),))
+        old_user = cursor.fetchone()
         cursor.execute("DELETE FROM users WHERE username = %s", (username,))
         connection.commit()
         if cursor.rowcount == 0:
             print("User wasn't deleted")
         else:
+            bot.send_message(old_user['user'], "Вас выгнали из рая. Придётся зарегистрироваться ешё раз: /register")
             print(f"User {username} deleted")
     except Error as e:
         connection.rollback()
@@ -260,6 +288,11 @@ def add_user(message):
         insert_query = "INSERT INTO users (user, username, password) VALUES (%s, %s, %s)"
         cursor.execute(insert_query, (str(user_id), str(username), password))
         connection.commit()
+        for main_adm in main_admins:
+            if str(user_id) == main_adm:
+                update_query = "UPDATE users SET admin = 1 WHERE username = %s"
+                cursor.execute(update_query, (str(username),))
+                connection.commit()
         print("New user registered")
         bot.send_message(chat_id, "Поздравляю, вы успешно зарегистрированы!\n\nЧтобы войти в систему введите команду /login")
     except Error as e:
@@ -297,7 +330,7 @@ def update_predict_counter(user_id):
         print("Database connection failed")
     cursor = connection.cursor(dictionary=True)
     try:
-        update_query = "UPDATE users SET predictions = predictions + 1 WHERE name = %s"
+        update_query = "UPDATE users SET predictions = predictions + 1 WHERE user = %s"
         cursor.execute(update_query, (str(user_id),))
         connection.commit()
         if cursor.rowcount == 0:
@@ -411,7 +444,7 @@ def recog_image(message, step):
 def webhook_handler():
     if request.method == "GET":
         return "Webhook works", 200
-    update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
+    update = types.Update.de_json(request.stream.read().decode("utf-8"))
     bot.process_new_updates([update])
     return 'OK', 200
     
